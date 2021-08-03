@@ -457,10 +457,11 @@ IronHorse IronHorse_inst
 	.pause(~pause_cpu),
 	
 	.hs_address(hs_address),
-	.hs_data_out(ioctl_din),
+	.hs_data_out(hs_data_out),
 	.hs_data_in(hs_data_in),
-	.hs_write(hs_write),
-	.hs_access(hs_access)
+	.hs_write_enable(hs_write_enable),
+	.hs_access_read(hs_access_read),
+	.hs_access_write(hs_access_write)
 );
 
 // HISCORE SYSTEM
@@ -468,8 +469,10 @@ IronHorse IronHorse_inst
 
 wire [11:0] hs_address;
 wire [7:0] hs_data_in;
-wire hs_write;
-wire hs_access;
+wire [7:0] hs_data_out;
+wire hs_write_enable;
+wire hs_access_read;
+wire hs_access_write;
 wire hs_pause;
 
 hiscore #(
@@ -481,9 +484,13 @@ hiscore #(
 	.clk(CLK_49M),
 	.paused(pause_cpu),
 	.ram_address(hs_address),
+	.data_from_ram(hs_data_out),
 	.data_to_ram(hs_data_in),
-	.ram_write(hs_write),
-	.ram_access(hs_access),
+	.data_from_hps(ioctl_dout),
+	.data_to_hps(ioctl_din),
+	.ram_write(hs_write_enable),
+	.ram_intent_read(hs_access_read),
+	.ram_intent_write(hs_access_write),
 	.pause_cpu(hs_pause)
 );
 

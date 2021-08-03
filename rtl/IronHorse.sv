@@ -58,8 +58,9 @@ module IronHorse
 	input         [11:0] hs_address,
 	input          [7:0] hs_data_in,
 	output         [7:0] hs_data_out,
-	input                hs_write,
-	input                hs_access
+	input                hs_write_enable,
+	input                hs_access_read,
+	input                hs_access_write
 );
 
 //------------------------------------------------- MiSTer data write selector -------------------------------------------------//
@@ -341,8 +342,9 @@ k005885 u11D
 	.hs_address(hs_address),
 	.hs_data_out(hs_data_out),
 	.hs_data_in(hs_data_in),
-	.hs_write(hs_write),
-	.hs_access(hs_access)
+	.hs_write_enable(hs_write_enable),
+	.hs_access_read(hs_access_read),
+	.hs_access_write(hs_access_write)
 );
 
 //Graphics ROMs
