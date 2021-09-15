@@ -85,14 +85,18 @@ module k005885
 	
 	//Extra data outputs for graphics ROMs
 	output        ATR4,     //Tilemap attribute bit 4
-	output        ATR5,     //Tilemap attribute bit 5
+	output        ATR5     //Tilemap attribute bit 5
 	
+	`ifdef MISTER_IRONHORSE
 	//MiSTer high score system I/O (to be used only with Iron Horse)
-	input  [11:0] hs_address,
-	input   [7:0] hs_data_in,
-	output  [7:0] hs_data_out,
-	input         hs_write,
-	input         hs_access
+		,
+		input  [11:0] hs_address,
+		input   [7:0] hs_data_in,
+		output  [7:0] hs_data_out,
+		input         hs_write_enable,
+		input         hs_access_read,
+		input         hs_access_write
+	`endif
 );
 
 //------------------------------------------------------- Signal outputs -------------------------------------------------------//
@@ -492,28 +496,54 @@ dpram_dc #(.widthad_a(10)) VRAM_TILECODE1
 	.q_b(tileram1_D)
 );
 
+
+
+`ifndef MISTER_IRONHORSE
+//Sprites
+dpram_dc #(.widthad_a(12)) VRAM_SPR
+(
+	.clock_a(CK49),
+	.address_a(A[11:0]),
+	.data_a(DBi),
+	.q_a(spriteram_Dout),
+	.wren_a(spriteram_cs & NRD),
+	
+	.clock_b(~CK49),
+	.address_b(spriteram_A),
+	.q_b(spriteram_D)
+);
+`else
 // Hiscore mux (this is only to be used with Iron Horse as its high scores are stored in sprite RAM)
-wire [11:0] VRAM_SPR_AD = hs_access ? hs_address : A[11:0];
-wire [7:0] VRAM_SPR_DIN = hs_access ? hs_data_in : DBi;
-wire VRAM_SPR_WE = hs_access ? hs_write : (spriteram_cs & NRD);
-wire [7:0] VRAM_SPR_DOUT;
-
-assign hs_data_out = hs_access ? VRAM_SPR_DOUT : 8'h00;
-assign spriteram_Dout = hs_access ? 8'h00 : VRAM_SPR_DOUT;
-
+// - Mirrored sprite RAM used to protect against corruption while retrieving highscore data
+wire [11:0] VRAM_SPR_AD = hs_access_write ? hs_address : A[11:0];
+wire [7:0] VRAM_SPR_DIN = hs_access_write ? hs_data_in : DBi;
+wire VRAM_SPR_WE = hs_access_write ? hs_write_enable : (spriteram_cs & NRD);
 //Sprites
 dpram_dc #(.widthad_a(12)) VRAM_SPR
 (
 	.clock_a(CK49),
 	.address_a(VRAM_SPR_AD),
 	.data_a(VRAM_SPR_DIN),
-	.q_a(VRAM_SPR_DOUT),
+	.q_a(spriteram_Dout),
 	.wren_a(VRAM_SPR_WE),
 	
 	.clock_b(~CK49),
 	.address_b(spriteram_A),
 	.q_b(spriteram_D)
 );
+//Sprite RAM shadow for highscore read access
+dpram_dc #(.widthad_a(12)) VRAM_SPR_SHADOW
+(
+	.clock_a(CK49),
+	.address_a(VRAM_SPR_AD),
+	.data_a(VRAM_SPR_DIN),
+	.wren_a(VRAM_SPR_WE),
+	
+	.clock_b(CK49),
+	.address_b(hs_address),
+	.q_b(hs_data_out)
+);
+`endif
 
 //-------------------------------------------------------- Tilemap layer -------------------------------------------------------//
 
