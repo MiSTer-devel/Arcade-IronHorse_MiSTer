@@ -12,7 +12,7 @@ An FPGA implementation of Iron Horse for the MiSTer platform
 ## Features
 - Logic modelled to match the original as closely as possible
 - Standard joystick and keyboard controls
-- High score saving (To save your scores, use the 'Save Settings' option in the OSD)
+- High score saving
 - Greg Miller's cycle-accurate MC6809E CPU core with modifications by Sorgelig
 - T80s CPU by Daniel Wallner with fixes by MikeJ, Sorgelig, and others
 - YM2203 implementation using JT03 by Jotego
@@ -62,3 +62,13 @@ Quick reference for folders and file placement:
 2) Although bootleg flaws are modeled, sprite flickering is not 100% accurate and the slower clock used by bootleg Iron Horse PCBs is missing - as such, the core behaves as if said bootleg used the same clock as the original PCB
 3) The high score system may cause lockups or unusual behavior when high scores are loaded - resetting the core usually fixes this
 4) The volume scale of the YM2203's SSG section needs further verification
+
+## Hiscore save/load
+
+Save and load of hiscores is supported for this core:
+
+To save your hiscores manually, press the 'Save Settings' option in the OSD.  Hiscores will be automatically loaded when the core is started.
+
+To enable automatic saving of hiscores, turn on the 'Autosave Hiscores' option, press the 'Save Settings' option in the OSD, and reload the core.  Hiscores will then be automatically saved (if they have changed) any time the OSD is opened.
+
+Hiscore data is stored in /media/fat/config/nvram/ as ```<mra filename>.nvm```
