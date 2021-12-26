@@ -41,6 +41,10 @@ module IronHorse
 	//depending on which game's bootleg ROM sets are loaded)
 	input          [1:0] is_bootleg,
 	
+	//This input serves to select a fractional divider to acheive 3.072MHz for the YM2203 depending on whether Iron Horse
+	//runs with original or underclocked timings to normalize sync frequencies
+	input                underclock,
+	
 	//Screen centering (alters HSync and VSync timing in the primary Konami 005885 to reposition the video output)
 	input          [3:0] h_center, v_center,
 	
@@ -93,13 +97,8 @@ reg [6:0] div = 7'd0;
 always_ff @(posedge clk_49m) begin
 	div <= div + 7'd1;
 end
-reg [3:0] n_div = 4'd0;
-always_ff @(negedge clk_49m) begin
-	n_div <= n_div + 4'd1;
-end
 wire cen_6m = !div[2:0];
 wire cen_3m = !div[3:0];
-wire n_cen_3m = !n_div;
 wire dcrm_cen = !div;
 
 //Phase generator for MC6809E (taken from MiSTer Vectrex core)
@@ -113,11 +112,22 @@ always_ff @(posedge clk_49m) begin
 	if(cen_6m) begin
 		clk_phase <= clk_phase + 1'd1;
 		case(clk_phase)
-			2'b01: E <= 1;
-			2'b10: Q <= 1;
+			2'b01: Q <= 1;
+			2'b10: E <= 1;
 		endcase
 	end
 end
+
+//Generate 3.072MHz clock enable for YM2203 to maintain consistent sound pitch when underclocked to normalize video timings
+//(uses Jotego's fractional clock divider from JTFRAME)
+wire cen_3m_adjust;
+jtframe_frac_cen sound_cen
+(
+	.clk(clk_49m),
+	.n(10'd50),
+	.m(10'd786),
+	.cen({1'bZ, cen_3m_adjust})
+);
 
 //------------------------------------------------------------ CPUs ------------------------------------------------------------//
 
@@ -224,7 +234,7 @@ T80s u9A
 (
 	.RESET_n(reset),
 	.CLK(clk_49m),
-	.CEN(n_cen_3m),
+	.CEN(cen_sound),
 	.INT_n(z80_n_int),
 	.MREQ_n(z80_n_mreq),
 	.IORQ_n(z80_n_iorq),
@@ -280,7 +290,7 @@ reg z80_n_int = 1;
 always_ff @(posedge clk_49m or posedge sirq_clr) begin
 	if(sirq_clr)
 		z80_n_int <= 1;
-	else if(n_cen_3m && sound_irq)
+	else if(cen_sound && sound_irq)
 		z80_n_int <= 0;
 end
 
@@ -428,6 +438,10 @@ prom_5 u10F
 
 //--------------------------------------------------------- Sound chips --------------------------------------------------------//
 
+//Select whether to use a fractional or integer clock divider for the YM2203 to maintain consistent sound pitch at both original
+//and underclocked timings
+wire cen_sound = underclock ? cen_3m_adjust : cen_3m;
+
 //Sound chip (Yamaha YM2203 - uses JT03 implementation by Jotego)
 wire [2:0] filter_en;
 wire [7:0] ym2203_D;
@@ -437,7 +451,7 @@ jt03 u6D
 (
 	.rst(~reset),
 	.clk(clk_49m),
-	.cen(n_cen_3m),
+	.cen(cen_sound),
 	.din(z80_Dout),
 	.dout(ym2203_D),
 	.IOA_out({5'bZZZZZ, filter_en}),

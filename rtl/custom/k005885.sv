@@ -704,12 +704,11 @@ reg [5:0] sprite_width;
 //to 32 sprites (0 - 155 in increments of 5) if one such ROM set is loaded (render 96 sprites at once, 0 - 485 in increments of
 //5, otherwise)
 wire [8:0] sprite_limit = (BTLG == 2'b10) ? 9'd155 : 9'd485;
-wire [8:0] sprite_fsm_reset = tile_ctrl[2] ? 9'd40 : 9'd0;
 always_ff @(posedge CK49) begin
 	//Reset the sprite state machine whenever the sprite horizontal postion, and in turn the horziontal counter, returns to 0
 	//Also hold the sprite state machine in this initial state for the first line while drawing sprites for bootleg Iron Horse
 	//ROM sets to prevent graphical garbage from occurring on the top-most line
-	if(sprite_hpos == sprite_fsm_reset || (BTLG == 2'b10 && (!flipscreen && sprite_vpos <= 9'd80) || (flipscreen && sprite_vpos >= 9'd304))) begin
+	if(sprite_hpos == 9'd0 || (BTLG == 2'b10 && (!flipscreen && sprite_vpos <= 9'd80) || (flipscreen && sprite_vpos >= 9'd304))) begin
 		sprite_width <= 0;
 		sprite_index <= 0;
 		sprite_offset <= 3'd4;

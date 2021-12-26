@@ -18,6 +18,7 @@ An FPGA implementation of Iron Horse for the MiSTer platform
 - YM2203 implementation using JT03 by Jotego
 - Modeling of bootleg PCBs' timing and graphical differences
 - Fully-tuned audio filters including the PCB's switchable low-pass filters
+- Option for normalized video timings to use with picky HDTVs and monitors (underclocks the game by ~1.8%)
 
 ## Installation
 Place `*.rbf` into the "_Arcade/cores" folder on your SD card.  Then, place `*.mra` into the "_Arcade" folder and ROM files from MAME into "games/mame".
