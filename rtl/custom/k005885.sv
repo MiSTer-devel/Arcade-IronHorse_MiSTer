@@ -4,7 +4,7 @@
 //  generator
 //  Graphics logic based on the video section of the Green Beret core for
 //  MiSTer by MiSTer-X
-//  Copyright (C) 2020, 2021 Ace
+//  Copyright (C) 2020, 2022 Ace
 //
 //  Permission is hereby granted, free of charge, to any person obtaining a
 //  copy of this software and associated documentation files (the "Software"),
@@ -85,10 +85,10 @@ module k005885
 	
 	//Extra data outputs for graphics ROMs
 	output        ATR4,     //Tilemap attribute bit 4
-	output        ATR5     //Tilemap attribute bit 5
+	output        ATR5      //Tilemap attribute bit 5
 	
 	`ifdef MISTER_HISCORE
-	//MiSTer high score system I/O (to be used only with Iron Horse)
+	//MiSTer high score system I/O
 		,
 		input  [11:0] hs_address,
 		input   [7:0] hs_data_in,
@@ -107,22 +107,19 @@ assign NRES = NEXR;
 //Generate NIOC output (active low)
 assign NIOC = ~(~NXCS & (A[13:11] == 3'b001));
 
-//TODO: The timing of the NRMW output is currently unknown - set to 1 for now
-assign NRMW = 1;
+//Generate NRMW output (active low)
+assign NRMW = ~tile_ctrl[7] & ~(mc6809e_E & ~div[2]);
 
 //Output bits 4 and 5 of tilemap attributes for graphics ROM addressing
-assign ATR4 = tile_ctrl[2] ? tile_attrib_D[4] : tile0_attrib_D[4];
-assign ATR5 = tile_ctrl[2] ? tile_attrib_D[5] : tile0_attrib_D[5];
+assign ATR4 = tileram_D[4];
+assign ATR5 = tileram_D[5];
 
 //Data output to CPU
 assign DBo = (ram_cs & ~NRD)          ? ram_Dout:
              (zram0_cs & ~NRD)        ? zram0_Dout:
              (zram1_cs & ~NRD)        ? zram1_Dout:
              (zram2_cs & ~NRD)        ? zram2_Dout:
-             (tile_attrib_cs & ~NRD)  ? tile0_attrib_Dout:
-             (tile_cs & ~NRD)         ? tile0_Dout:
-             (tile1_attrib_cs & ~NRD) ? tile1_attrib_Dout:
-             (tile1_cs & ~NRD)        ? tile1_Dout:
+             (tile_cs & ~NRD)         ? tileram_Dout:
              (spriteram_cs & ~NRD)    ? spriteram_Dout:
              8'hFF;
 
@@ -133,15 +130,10 @@ reg [3:0] div = 4'd0;
 always_ff @(posedge CK49) begin
 	div <= div + 4'd1;
 end
-reg [2:0] n_div = 3'd0;
-always_ff @(negedge CK49) begin
-	n_div <= n_div + 3'd1;
-end
 wire cen_6m = !div[2:0];
-wire n_cen_6m = !n_div;
 wire cen_3m = !div;
 assign NCK2 = div[2];
-assign H1O = div[3];
+assign H1O = h_cnt[0];
 
 //The MC6809E requires two identical clocks with a 90-degree offset - assign these here
 reg mc6809e_E = 0;
@@ -164,118 +156,176 @@ assign NCPE = mc6809e_E;
 //Output NEQ combines NCPE and NCPQ together via an AND gate - assign this here
 assign NEQ = NCPE & NCPQ;
 
+//Edge detection for signals other than clocks used to latch data
+reg old_hcnt1, old_hcnt2, old_vcnt4, old_vcnt5, old_tile_color_latch, old_tile_shift_latch, old_vblank;
+always_ff @(posedge CK49) begin
+	old_hcnt1 <= h_cnt[1];
+	old_hcnt2 <= h_cnt[2];
+	old_vcnt4 <= v_cnt[4];
+	old_vcnt5 <= v_cnt[5];
+	old_tile_color_latch <= tile_color_latch;
+	old_tile_shift_latch <= tile_shift_latch;
+	old_vblank <= vblank;
+end
+
 //-------------------------------------------------------- Video timings -------------------------------------------------------//
 
-//The 005885's video output has 384 horziontal lines and 262 vertical lines with an active resolution of 240x224.  Declare both
-//counters as 9-bit registers.
+//The 005885's video output has 384 horziontal lines and 262 vertical lines with an active resolution of 240x224 (280x224 if tile
+//control register bit 2 is set).  Declare both counters as 9-bit registers.
 reg [8:0] h_cnt = 9'd0;
 reg [8:0] v_cnt = 9'd0;
 
-//Increment horizontal counter on every falling edge of the pixel clock and increment vertical counter when horizontal counter
-//rolls over
-reg hblank = 0;
-reg vblank = 0;
-reg vblank_irq_en = 0;
-reg frame_odd_even = 0;
+//Define the range of values the vertical counter will count between based on the additional vertical center signal and whether
+//Iron Horse or Jackal bootlegs are loaded
 //Add an extra 10 lines to the vertical counter if a bootleg Iron Horse ROM set is loaded or remove 9 lines from the vertical
 //counter if a bootleg Jackal ROM set is loaded
-//Also add 2 extra lines to the vertical counter if using the extended 280x224 video mode
+reg [8:0] vcnt_start = 0;
 reg [8:0] vcnt_end = 0;
 always_ff @(posedge CK49) begin
 	if(cen_6m) begin
-		if(BTLG == 2'b01)
-			vcnt_end <= 9'd252;
-		else if(BTLG == 2'b10)
-			vcnt_end <= 9'd271;
-		else
-			vcnt_end <= 9'd261;
+		if(BTLG == 2'b01) begin
+			vcnt_start <= 9'd248 - VCTR;
+			vcnt_end <= 9'd500 - VCTR;
+		end
+		else if(BTLG == 2'b10) begin
+			vcnt_start <= 9'd240 - VCTR;
+			vcnt_end <= 9'd511 - VCTR;
+		end
+		else begin
+			if(tile_ctrl[2] && (HCTR < 4'd8 || HCTR > 4'd12)) begin
+				vcnt_start <= 9'd248 - VCTR;
+				vcnt_end <= 9'd509 - VCTR;
+			end
+			else begin
+				vcnt_start <= 9'd249 - VCTR;
+				vcnt_end <= 9'd510 - VCTR;
+			end
+		end
 	end
 end
-//Reposition HSync and VSync if a bootleg Iron Horse or Jackal ROM set is loaded
+
+//Reposition HSync if a bootleg Iron Horse or Jackal ROM set is loaded
+//Also reposition if Finalizer is loaded
 reg [8:0] hsync_start = 9'd0;
 reg [8:0] hsync_end = 9'd0;
-reg [8:0] vsync_start = 9'd0;
-reg [8:0] vsync_end = 9'd0;
 always_ff @(posedge CK49) begin
 	if(BTLG == 2'b01) begin
-		hsync_start <= HCTR[3] ? 9'd287 : 9'd295;
-		hsync_end <= HCTR[3] ? 9'd318 : 9'd326;
-		vsync_start <= 9'd244;
-		vsync_end <= 9'd251;
+		if(flipscreen) begin
+			hsync_start <= HCTR[3] ? 9'd192 : 9'd185;
+			hsync_end <= HCTR[3] ? 9'd223 : 9'd216;
+		end
+		else begin
+			hsync_start <= HCTR[3] ? 9'd184 : 9'd177;
+			hsync_end <= HCTR[3] ? 9'd215 : 9'd208;
+		end
 	end
 	else if(BTLG == 2'b10) begin
-		hsync_start <= HCTR[3] ? 9'd290 : 9'd310;
-		hsync_end <= HCTR[3] ? 9'd321 : 9'd341;
-		vsync_start <= 9'd255;
-		vsync_end <= 9'd262;
-	end
-	else if(tile_ctrl[2]) begin
-		hsync_start <= HCTR[3] ? 9'd312 : 9'd320;
-		hsync_end <= HCTR[3] ? 9'd343 : 9'd351;
-		vsync_start <= 9'd254;
-		vsync_end <= 9'd261;
+		hsync_start <= HCTR[3] ? 9'd198 : 9'd191;
+		hsync_end <= HCTR[3] ? 9'd229 : 9'd222;
 	end
 	else begin
-		hsync_start <= HCTR[3] ? 9'd288 : 9'd296;
-		hsync_end <= HCTR[3] ? 9'd319 : 9'd327;
-		vsync_start <= 9'd254;
-		vsync_end <= 9'd261;
+		if(tile_ctrl[2]) begin
+			if(flipscreen) begin
+				hsync_start <= HCTR[3] ? 9'd220 : 9'd213;
+				hsync_end <= HCTR[3] ? 9'd251 : 9'd244;
+			end
+			else begin
+				hsync_start <= HCTR[3] ? 9'd180 : 9'd173;
+				hsync_end <= HCTR[3] ? 9'd211 : 9'd204;
+			end
+		end
+		else begin
+			hsync_start <= HCTR[3] ? 9'd188 : 9'd181;
+			hsync_end <= HCTR[3] ? 9'd219 : 9'd212;
+		end
 	end
 end
+
+//The horizontal and vertical counters behave as follows at every rising edge of the pixel clock:
+//-Horizontal counter start at 0, then counts to 511 (increment by 1 when equal to 48)
+//-Vertical counter start at 0, then counts to 510 (increment by 1 when the horizontal counter is set to 48)
+//-Horizontal counter resets to 128 for a total of 384 horizontal lines
+//-Vertical counter resets to 250 for a total of 262 vertical lines (adjustable with added vertical center signal)
+//-Vertical counter increments when the horizontal counter equals 176
+//-VBlank is active when the horizontal counter is between 495 - 510 and 250 - 270
+//Model this behavior here
+reg hblank = 0;
+reg vblank = 0;
+reg frame_odd_even = 0;
 always_ff @(posedge CK49) begin
 	if(cen_6m) begin
 		case(h_cnt)
-			0: begin
-				vblank_irq_en <= 0;
+			48: begin
+				v_cnt <= v_cnt + 9'd1;
 				h_cnt <= h_cnt + 9'd1;
 			end
-			//HBlank ends two lines earlier than normal on bootleg Jackal PCBs
-			11: begin
-				if(BTLG == 2'b01)
-					hblank <= 0;
-				h_cnt <= h_cnt + 9'd1;
-			end
-			13: begin
-				if(BTLG != 2'b01)
-					hblank <= 0;
-				h_cnt <= h_cnt + 9'd1;
-			end
-			//Shift the start of HBlank two lines earlier when bootleg Jackal ROMs are loaded
-			251: begin
-				if(BTLG == 2'b01 && !tile_ctrl[2])
+			//Shift the start of HBlank two lines earlier when bootleg Jackal ROMs are loaded without screen flipping
+			138: begin
+				if(BTLG == 2'b01 && !flipscreen)
 					hblank <= 1;
 				h_cnt <= h_cnt + 9'd1;
 			end
-			253: begin
-				if(BTLG != 2'b01 && !tile_ctrl[2])
+			140: begin
+				if(BTLG != 2'b01 && (!tile_ctrl[2] || (tile_ctrl[2] && !flipscreen)))
 					hblank <= 1;
 				h_cnt <= h_cnt + 9'd1;
 			end
-			//Shift the start of HBlank 40 lines later when using the wider 280x224 video mode 
-			293: begin
-				if(tile_ctrl[2])
+			//Shift the start of HBlank two lines later when bootleg Jackal ROMs are loaded
+			142: begin
+				if(BTLG == 2'b01 && flipscreen)
 					hblank <= 1;
 				h_cnt <= h_cnt + 9'd1;
 			end
-			383: begin
-				h_cnt <= 0;
+			176: begin
+				h_cnt <= h_cnt + 9'd1;
 				case(v_cnt)
-					15: begin
+					16: begin
 						vblank <= 0;
 						v_cnt <= v_cnt + 9'd1;
 					end
-					239: begin
+					271: begin
+						vblank <= 0;
+						v_cnt <= v_cnt + 9'd1;
+					end
+					495: begin
 						vblank <= 1;
-						vblank_irq_en <= 1;
 						frame_odd_even <= ~frame_odd_even;
 						v_cnt <= v_cnt + 9'd1;
 					end
-					vcnt_end: begin
-						v_cnt <= 9'd0;
-					end
+					vcnt_end: v_cnt <= vcnt_start;
 					default: v_cnt <= v_cnt + 9'd1;
 				endcase
 			end
+			//HBlank starts 40 lines later when tile control register 2 is set with screen flipping
+			180: begin
+				if(tile_ctrl[2] && flipscreen)
+					hblank <= 1;
+				h_cnt <= h_cnt + 9'd1;
+			end
+			//HBlank ends 40 lines earlier when tile control register 2 is set without screen flipping
+			244: begin
+				if(tile_ctrl[2] && !flipscreen)
+					hblank <= 0;
+				h_cnt <= h_cnt + 9'd1;
+			end
+			//Shift the end of HBlank two lines earlier when bootleg Jackal ROMs are loaded without screen flipping
+			282: begin
+				if(BTLG == 2'b01 && !flipscreen)
+					hblank <= 0;
+				h_cnt <= h_cnt + 9'd1;
+			end
+			284: begin
+				if(BTLG != 2'b01 && (!tile_ctrl[2] || (tile_ctrl[2] && flipscreen)))
+					hblank <= 0;
+				h_cnt <= h_cnt + 9'd1;
+			end
+			//Shift the end of HBlank two lines later when bootleg Jackal ROMs are loaded with screen flipping
+			286: begin
+				if(BTLG == 2'b01 && flipscreen)
+					hblank <= 0;
+				h_cnt <= h_cnt + 9'd1;
+			end
+			511: h_cnt <= 9'd128;
 			default: h_cnt <= h_cnt + 9'd1;
 		endcase
 	end
@@ -286,55 +336,48 @@ assign HBLK = hblank;
 assign VBLK = vblank;
 
 //Generate horizontal sync and vertical sync (both active low)
-assign NHSY = HCTR[3] ? ~(h_cnt >= hsync_start - ~HCTR[2:0] && h_cnt <= hsync_end - ~HCTR[2:0]):
-                        ~(h_cnt >= hsync_start + HCTR[2:0] && h_cnt <= hsync_end + HCTR[2:0]);
-assign NVSY = ~(v_cnt >= vsync_start - VCTR && v_cnt <= vsync_end - VCTR);
+assign NHSY = ~(h_cnt > (hsync_start - HCTR[2:0]) && h_cnt < (hsync_end - HCTR[2:0]));
+assign NVSY = BTLG == 2'b00 ? ~(v_cnt >= vcnt_start && v_cnt <= vcnt_start + 9'd5):
+                              ~(v_cnt >= vcnt_start && v_cnt <= vcnt_start + 9'd7);
 assign NCSY = NHSY ^ NVSY;
 
 //------------------------------------------------------------- IRQs -----------------------------------------------------------//
 
 //IRQ (triggers every VBlank)
 reg vblank_irq = 1;
-always_ff @(posedge CK49 or negedge NEXR) begin
-	if(!NEXR)
+always_ff @(posedge CK49) begin
+	if(!NEXR || !irq_mask)
 		vblank_irq <= 1;
-	else if(cen_6m) begin
-		if(!irq_mask)
-			vblank_irq <= 1;
-		else if(vblank_irq_en)
-			vblank_irq <= 0;
-	end
+	else if(!old_vblank && vblank)
+		vblank_irq <= 0;
 end
 assign NIRQ = vblank_irq;
 
-//NMI (triggers every 64 scanlines starting from scanline 48)
+//NMI (triggers on the falling edge of vertical counter bits 4 or 5 based on the state of tile control register bit 2)
 reg nmi = 1;
-always_ff @(posedge CK49 or negedge NEXR) begin
-	if(!NEXR)
+always_ff @(posedge CK49) begin
+	if(!NEXR || !nmi_mask)
 		nmi <= 1;
-	else if(cen_3m) begin
-		if(!nmi_mask)
-			nmi <= 1;
-		else if(tile_ctrl[2]) begin
-			if(v_cnt % 9'd32 == 31)
+	else begin
+		if(tile_ctrl[2]) begin
+			if(old_vcnt4 && !v_cnt[4])
 				nmi <= 0;
 		end
-		else
-			if(v_cnt % 9'd64 == 63)
+		else begin
+			if(old_vcnt5 && !v_cnt[5])
 				nmi <= 0;
+		end
 	end
 end
 assign NNMI = nmi;
 
 //FIRQ (triggers every second VBlank)
 reg firq = 1;
-always_ff @(posedge CK49 or negedge NEXR) begin
-	if(!NEXR)
+always_ff @(posedge CK49) begin
+	if(!NEXR || !firq_mask)
 		firq <= 1;
-	else if(cen_3m) begin
-		if(!firq_mask)
-			firq <= 1;
-		else if(!frame_odd_even && v_cnt == 9'd240)
+	else begin
+		if(frame_odd_even && !old_vblank && vblank)
 			firq <= 0;
 	end
 end
@@ -455,63 +498,23 @@ spram #(8, 5) ZRAM2
 //VRAM is external to the 005885 and combines multiple banks into a single 8KB RAM chip for tile attributes and data (two layers),
 //and two sprite banks.  For simplicity, this RAM has been made internal to the 005885 implementation and split into its
 //constituent components.
-wire tile_attrib_cs = ~NXCS & (A[13:10] == 4'b1000);
-wire tile_cs = ~NXCS & (A[13:10] == 4'b1001);
-wire tile1_attrib_cs = ~NXCS & (A[13:10] == 4'b1010);
-wire tile1_cs = ~NXCS & (A[13:10] == 4'b1011);
+wire tile_cs = ~NXCS & (A[13:12] == 2'b10);
 wire spriteram_cs = ~NXCS & (A[13:12] == 2'b11);
 
-wire [7:0] tile0_attrib_Dout, tile0_Dout, tile1_attrib_Dout, tile1_Dout, spriteram_Dout;
-wire [7:0] tile0_attrib_D, tile0_D, tile1_attrib_D, tile1_D, spriteram_D;
-//Tilemap layer 0
-dpram_dc #(.widthad_a(10)) VRAM_TILEATTRIB0
+wire [7:0] tileram_Dout, spriteram_Dout;
+wire [7:0] tileram_D, spriteram_D;
+//Tilemap
+dpram_dc #(.widthad_a(12)) VRAM_TILE
 (
 	.clock_a(CK49),
-	.address_a(A[9:0]),
+	.address_a(A[11:0]),
 	.data_a(DBi),
-	.q_a(tile0_attrib_Dout),
-	.wren_a(tile_attrib_cs & NRD),
-	
-	.clock_b(CK49),
-	.address_b(vram_A),
-	.q_b(tile0_attrib_D)
-);
-dpram_dc #(.widthad_a(10)) VRAM_TILECODE0
-(
-	.clock_a(CK49),
-	.address_a(A[9:0]),
-	.data_a(DBi),
-	.q_a(tile0_Dout),
+	.q_a(tileram_Dout),
 	.wren_a(tile_cs & NRD),
 	
 	.clock_b(CK49),
 	.address_b(vram_A),
-	.q_b(tile0_D)
-);
-//Tilemap layer 1
-dpram_dc #(.widthad_a(10)) VRAM_TILEATTRIB1
-(
-	.clock_a(CK49),
-	.address_a(A[9:0]),
-	.data_a(DBi),
-	.q_a(tile1_attrib_Dout),
-	.wren_a(tile1_attrib_cs & NRD),
-	
-	.clock_b(CK49),
-	.address_b(vram_A),
-	.q_b(tile1_attrib_D)
-);
-dpram_dc #(.widthad_a(10)) VRAM_TILECODE1
-(
-	.clock_a(CK49),
-	.address_a(A[9:0]),
-	.data_a(DBi),
-	.q_a(tile1_Dout),
-	.wren_a(tile1_cs & NRD),
-	
-	.clock_b(CK49),
-	.address_b(vram_A),
-	.q_b(tile1_D)
+	.q_b(tileram_D)
 );
 
 
@@ -526,8 +529,8 @@ dpram_dc #(.widthad_a(12)) VRAM_SPR
 	.q_a(spriteram_Dout),
 	.wren_a(spriteram_cs & NRD),
 	
-	.clock_b(~CK49),
-	.address_b(spriteram_A),
+	.clock_b(CK49),
+	.address_b({sprite_bank, spritecache_A[10:0]}),
 	.q_b(spriteram_D)
 );
 `else
@@ -545,8 +548,8 @@ dpram_dc #(.widthad_a(12)) VRAM_SPR
 	.q_a(spriteram_Dout),
 	.wren_a(VRAM_SPR_WE),
 	
-	.clock_b(~CK49),
-	.address_b(spriteram_A),
+	.clock_b(CK49),
+	.address_b({sprite_bank, spritecache_A[10:0]}),
 	.q_b(spriteram_D)
 );
 //Sprite RAM shadow for highscore read access
@@ -563,112 +566,206 @@ dpram_dc #(.widthad_a(12)) VRAM_SPR_SHADOW
 );
 `endif
 
+//Sprite cache - this isn't present on the original 005885; it is used here to simulate framebuffer-like behavior where
+//sprites are rendered with a 1-frame delay without using an actual framebuffer to save on limited FPGA BRAM resources
+//This cache will copy all sprites from sprite RAM during an active frame for the sprite logic to read back on the next
+//frame
+reg [11:0] spritecache_A = 12'd0;
+always_ff @(posedge CK49) begin
+	if(cen_6m) begin
+		if(spritecache_we)
+			spritecache_A <= spritecache_A + 12'd1;
+		else if(vblank)
+			spritecache_A <= 12'd0;
+		else
+			spritecache_A <= spritecache_A;
+	end
+end	
+wire [7:0] spriteram_Dcache;
+wire spritecache_we = ~vblank & ~spritecache_A[11];
+dpram_dc #(.widthad_a(12)) SPR_CACHE
+(
+	.clock_a(CK49),
+	.address_a({frame_odd_even, spritecache_A[10:0]}),
+	.data_a(spriteram_D),
+	.wren_a(spritecache_we),
+	
+	.clock_b(~CK49),
+	.address_b({~frame_odd_even, spriteram_A}),
+	.q_b(spriteram_Dcache)
+);
+
 //-------------------------------------------------------- Tilemap layer -------------------------------------------------------//
 
-//The Konami 005885 contains two tilemap layers. Finalizer - Super Transformation uses the second layer to draw the HUD at the
-//top of the screen.  Latch tilemap data out of bank 0 or bank 1 of the tilemap section of VRAM based on how far the game has
-//drawn the tilemap layer when tile control bit 2 is set, otherwise grab tilemap data from bank 0 of the tilemap section of VRAM
-//at all times
-reg [7:0] tile_attrib_D, tile_D;
-reg [5:0] tile_hoffset = 6'd0;
-wire tile1_en = flipscreen ? h_cnt > 9'd255 : h_cnt < 9'd40;
+//XOR horizontal and vertical counter bits with flipscreen bit
+wire [7:2] hcnt_x = h_cnt[7:2] ^ {6{flipscreen}};
+wire [8:0] vcnt_x = v_cnt ^ {9{flipscreen}};
+
+//Enable the second tilemap layer when the extended 280x224 mode is active for the first 32 vertical lines and signal to inhibit
+//scrolling when drawing this area (used by Finalizer - Super Transformation to draw the HUD)
+wire tile1_en = flipscreen ? (h_cnt > 127 && h_cnt < 256) : (h_cnt > 139 && h_cnt < 256);
+reg tile1_scroll_inhib = 0;
 always_ff @(posedge CK49) begin
-	if(tile_ctrl[2] && tile1_en) begin
-		tile_D <= tile1_D;
-		tile_attrib_D <= tile1_attrib_D;
-		tile_hoffset <= 6'd0;
-	end
-	else begin
-		tile_D <= tile0_D;
-		tile_attrib_D <= tile0_attrib_D;
-		if(tile_ctrl[2]) begin
-			if(flipscreen)
-				tile_hoffset <= 6'd0;
-			else
-				tile_hoffset <= 6'd40;
+	if(tile_ctrl[2]) begin
+		if(cen_6m) begin
+			case(h_cnt)
+				9'd146: begin
+					if(flipscreen)
+						tile1_scroll_inhib <= 1;
+				end
+				9'd178: begin
+					if(flipscreen)
+						tile1_scroll_inhib <= 0;
+				end
+				9'd224: begin
+					if(!flipscreen)
+						tile1_scroll_inhib <= 1;
+				end
+				9'd274: begin
+					if(!flipscreen)
+						tile1_scroll_inhib <= 0;
+				end
+				default:;
+			endcase
 		end
 	end
 end
 
-//XOR horizontal and vertical counter bits with flipscreen bit
-wire [8:0] hcnt_x = h_cnt ^ {9{flipscreen}};
-wire [8:0] vcnt_x = v_cnt ^ {9{flipscreen}};
-
 //Generate tilemap position by summing the XORed counter bits with their respective scroll registers or ZRAM bank 0 based on
-//whether row scroll or column scroll is enabled (do not allow scrolling when drawing Finalizer - Super Transformation's HUD
-//and offset the tilemap layer down by one line and right by 4 with this game)
-wire [8:0] row_scroll = (tile_ctrl[2] & !flipscreen & tile1_en) ? 9'd0:
-                        (tile_ctrl[2] & flipscreen & tile1_en) ? 9'd40:
-                        (scroll_ctrl[3:1] == 3'b101) ? zram0_D : {scroll_ctrl[0], scroll_x};
-wire [8:0] col_scroll = (scroll_ctrl[3:1] == 3'b011) ? zram0_D : scroll_y;
-wire [8:0] tilemap_hpos = hcnt_x + row_scroll - tile_hoffset;
+//whether row scroll or column scroll is enabled
+reg [7:0] zram_lat;
+always_ff @(posedge CK49) begin
+	if(old_hcnt2 && !h_cnt[2])
+		zram_lat <= zram0_D;
+end
+wire [8:0] row_scroll = tile1_en ? (flipscreen ? 9'b010101000 : 9'b000101000):
+                        (scroll_ctrl[3:1] == 3'b101) ? (flipscreen ? zram_lat : zram0_D) : {scroll_ctrl[0], scroll_x};
+wire [8:0] col_scroll = (scroll_ctrl[3:1] == 3'b011) ? (flipscreen ? zram_lat : zram0_D) : scroll_y;
+wire [7:3] tilemap_hpos = hcnt_x[7:3] + row_scroll[7:3];
 wire [8:0] tilemap_vpos = vcnt_x + col_scroll;
 
 //Address output to tilemap section of VRAM
-wire [9:0] vram_A = {tilemap_vpos[7:3], tilemap_hpos[7:3]};
+wire [11:0] vram_A = {tile1_en, h_cnt[2], tilemap_vpos[7:3], tilemap_hpos[7:3]};
 
-//Assign tile index as bits 5 and 6 of tilemap attributes and the tile code
-wire [9:0] tile_index = tile_ctrl[2] ? {tile_attrib_D[7:6], tile_D} : {tile0_attrib_D[7:6], tile0_D};
-
-//XOR tile H/V flip bits with the flipscreen bit
-wire tile_hflip = tile_ctrl[2] ? tile_attrib_D[4] : tile0_attrib_D[4];
-wire tile_vflip = tile_ctrl[2] ? tile_attrib_D[5] : tile0_attrib_D[5];
-
-//Address output to graphics ROMs
-assign R = {tile_ctrl[1:0], tile_index, (tilemap_vpos[2:0] ^ {3{tile_vflip}}), (tilemap_hpos[2] ^ tile_hflip)};
-
-//Latch tile data from graphics ROMs, tile colors and tile H flip bit from VRAM on the falling edge of tilemap horizontal position
-//bit 1 (bit 0 for Finalizer)
-reg [15:0] RD_lat = 16'd0;
+//Latch tilemap bank from bits 7 and 6 of the tilemap section of VRAM on the rising edge of horizontal counter bit 2
+//Also latch tilemap flip attributes from bits 5 and 4, as well as tilemap colors from the lower 4 bits of the tilemap section
+//of VRAM
 reg [3:0] tile_color = 4'd0;
-reg tile_hflip_lat = 0;
-reg old_tilehpos1;
+reg [2:0] row_scroll_lat = 3'd0;
+reg [1:0] tile_bank = 2'd0;
+reg [1:0] tile_flip = 2'd0;
 always_ff @(posedge CK49) begin
-	old_tilehpos1 <= tilemap_hpos[1];
-	if(tile_ctrl[2]) begin
-		tile_color <= tile_attrib_D[3:0];
-		RD_lat <= {RDU, RDL};
-		tile_hflip_lat <= tile_attrib_D[4];
-	end
-	else if((old_tilehpos1 && !tilemap_hpos[1])) begin
-		tile_color <= tile0_attrib_D[3:0];
-		RD_lat <= flipscreen ? {RDL, RDU} : {RDU, RDL};
-		tile_hflip_lat <= tile0_attrib_D[4];
+	if(!old_hcnt2 && h_cnt[2]) begin
+		tile_bank <= tileram_D[7:6];
+		tile_flip <= tileram_D[5:4];
+		tile_color <= tileram_D[3:0];
+		row_scroll_lat <= row_scroll[2:0];
 	end
 end
 
-//Multiplex graphics ROM data down from 16 bits to 8 using bit 1 of the horizontal position
-wire [7:0] RD = (tilemap_hpos[1] ^ tile_hflip_lat) ? RD_lat[7:0] : RD_lat[15:8];
-
-//Further multiplex graphics ROM data down from 8 bits to 4 using bit 0 of the horizontal position
-wire [3:0] tile_pixel = (tilemap_hpos[0] ^ tile_hflip_lat) ? RD[3:0] : RD[7:4];
-
-//Retrieve tilemap select bit from bit 1 of the tile control register XORed with bit 5 of the same register (delay by 3 cycles of
-//the pixel clock when using the extended 280x240 video mode)
-wire tile_sel = tile_ctrl[1] ^ tile_ctrl[5];
-reg tilemap_en = 0;
-reg [2:0] tile1_en_dly;
+//Latch tile index, the lower two bits of the tile control register, tile bank bits, tile flip bits and the lower 3 bits of
+//row scroll on the falling edge of horizontal counter bit 2
+reg [7:0] tile_index = 8'd0;
+reg [1:0] tile_bank_dly = 2'd0;
+reg [1:0] tile_upper = 2'd0;
+reg tile_hflip, tile_vflip;
 always_ff @(posedge CK49) begin
-	if(n_cen_6m) begin
-		tile1_en_dly <= {tile1_en_dly[1:0], tile1_en};
-		if(!tile_ctrl[2])
-			tilemap_en <= tile_sel;
-		else
-			tilemap_en <= tile1_en_dly[2];
+	if(old_hcnt2 && !h_cnt[2]) begin
+		tile_upper <= tile_ctrl[1:0];
+		tile_bank_dly <= tile_bank;
+		tile_index <= tileram_D;
+		tile_hflip <= tile_flip[0];
+		tile_vflip <= tile_flip[1];
 	end
+end
+
+//Address output to graphics ROMs
+assign R = {tile_upper, tile_bank_dly, tile_index, (tilemap_vpos[2:0] ^ {3{tile_vflip}}), (hcnt_x[2] ^ tile_hflip)};
+
+//Latch tilemap pixel data from graphics ROMs on the rising edge of horizontal counter bit 1
+reg [15:0] RD = 16'd0;
+always_ff @(posedge CK49) begin
+	if(!old_hcnt1 && h_cnt[1])
+		RD <= {RDU, RDL};
+end
+
+//Latch tile colors and tile HFLIP again every 8 pixels
+wire tile_color_latch = (h_cnt[2:0] != 3'b001);
+reg [3:0] tile_color_dly = 4'd0;
+reg pixel_hflip;
+always_ff @(posedge CK49) begin
+	if(!old_tile_color_latch && tile_color_latch) begin
+		tile_color_dly <= tile_color;
+		pixel_hflip <= flipscreen ^ tile_hflip;
+	end
+end
+
+//Do the same to the lower 3 bits of row scroll one pixel later
+wire tile_shift_latch = (h_cnt[2:0] != 3'b010);
+reg [2:0] tile_shift = 3'd0;
+always_ff @(posedge CK49) begin
+	if(!old_tile_shift_latch && tile_shift_latch)
+		tile_shift <= row_scroll_lat;
+end
+
+//Multiplex graphics ROM data down from 16 bits to 4 using bits 1 and 0 of the horizontal counter
+wire [3:0] tile_pixel = (h_cnt[1:0] ^ {2{pixel_hflip}}) == 2'b00 ? RD[7:4]:
+                        (h_cnt[1:0] ^ {2{pixel_hflip}}) == 2'b01 ? RD[3:0]:
+                        (h_cnt[1:0] ^ {2{pixel_hflip}}) == 2'b10 ? RD[15:12]:
+                        RD[11:8];
+
+//Prioritize the tilemap layer when using the extended 280x224 mode for Finalizer in the score display area, otherwise give priority
+//to sprites
+wire tile_sel = tile_ctrl[2] & (h_cnt > 147 && h_cnt < 274);
+reg tilemap_en = 0;
+always_ff @(posedge CK49) begin
+	if(cen_6m)
+		tilemap_en <= tile_sel;
 end
 
 //Address output to tilemap LUT PROM
-assign VCF = tile_color;
+assign VCF = tile_color_dly;
 assign VCB = tile_pixel;
 
-//Shift the tilemap layer left by two lines when the screen is flipped (shift by 4 lines for Finalizer)
-reg [15:0] tilemap_shift;
+//Latch tilemap LUT PROM data input at every rising edge of the pixel clock
+reg [3:0] VCD_lat = 4'd0;
 always_ff @(posedge CK49) begin
 	if(cen_6m)
-		tilemap_shift <= {VCD, tilemap_shift[15:4]};
+		VCD_lat <= VCD;
 end
-wire [3:0] tilemap_D = tile_ctrl[2] ? tilemap_shift[3:0] : (flipscreen ? tilemap_shift[11:8] : VCD); 
+
+//Shift the tilemap layer horizontally based on the lower 3 bits of ZRAM or the X scroll register
+//If the 005885's 280x224 video mode is active, inhibit scrolling when displaying the second tilemap layer (used by Finalizer
+//to display the HUD)
+reg [31:0] tilemap_shift;
+always_ff @(posedge CK49) begin
+	if(cen_6m)
+		tilemap_shift <= {flipscreen ? VCD : VCD_lat, tilemap_shift[31:4]};
+end
+reg [3:0] tilemap_scroll;
+always @(*) begin
+	if(tile1_scroll_inhib)
+		tilemap_scroll <= flipscreen ? tilemap_shift[31:28] : tilemap_shift[3:0];
+	else
+		case(tile_shift ^ {3{flipscreen}})
+			3'b000: tilemap_scroll <= tilemap_shift[3:0];
+			3'b001: tilemap_scroll <= tilemap_shift[7:4];
+			3'b010: tilemap_scroll <= tilemap_shift[11:8];
+			3'b011: tilemap_scroll <= tilemap_shift[15:12];
+			3'b100: tilemap_scroll <= tilemap_shift[19:16];
+			3'b101: tilemap_scroll <= tilemap_shift[23:20];
+			3'b110: tilemap_scroll <= tilemap_shift[27:24];
+			3'b111: tilemap_scroll <= tilemap_shift[31:28];
+		endcase
+end
+reg [39:0] tilemap_dly;
+always_ff @(posedge CK49) begin
+	if(cen_6m)
+		tilemap_dly <= {tilemap_scroll, tilemap_dly[39:4]};
+end
+//Further shift the tilemap layer when the screen is flipped (shift an extra line to offset the layer relative to sprites
+//when a bootleg Jackal or Iron Horse ROM set is loaded and screen flipping is enabled)
+wire [3:0] tilemap_D = flipscreen ? (BTLG == 2'b01 ? tilemap_dly[7:4] : (BTLG == 2'b10 ? tilemap_dly[3:0] : tilemap_dly[11:8])) : tilemap_scroll;
 
 //-------------------------------------------------------- Sprite layer --------------------------------------------------------//
 
@@ -677,34 +774,43 @@ reg [8:0] sprite_hpos = 9'd0;
 reg [8:0] sprite_vpos = 9'd0;
 always_ff @(posedge CK49) begin
 	if(cen_6m) begin
-		sprite_hpos <= h_cnt;
+        if(BTLG == 2'b10 && flipscreen)
+            sprite_hpos <= h_cnt - 9'd258;
+        else
+            sprite_hpos <= h_cnt - 9'd256;
 		//If a bootleg Iron Horse ROM set is loaded, apply a vertical offset of 65 lines (66 when flipped) to recreate the
 		//bootleg hardware's 1-line downward vertical offset between the sprite and tilemap layers, otherwise apply a
 		//vertical offset of 66 lines (65 lines when flipped)
 		if(BTLG == 2'b10)
 			if(flipscreen)
-				sprite_vpos <= v_cnt + 9'd66;
+				sprite_vpos <= v_cnt - 9'd190;
 			else
-				sprite_vpos <= v_cnt + 9'd65;
+				sprite_vpos <= v_cnt - 9'd191;
 		else
 			if(flipscreen)
-				sprite_vpos <= v_cnt + 9'd65;
+				sprite_vpos <= v_cnt - 9'd191;
 			else
-				sprite_vpos <= v_cnt + 9'd66;
+				sprite_vpos <= v_cnt - 9'd190;
 	end
 end
 
 //Sprite state machine
 reg [8:0] sprite_index;
 reg [2:0] sprite_offset;
-reg [7:0] sprite_attrib0, sprite_attrib1, sprite_attrib2, sprite_attrib3, sprite_attrib4;
 reg [2:0] sprite_fsm_state;
+reg [11:0] sprite_code;
+reg [8:0] sprite_limit;
+reg [8:0] sprite_x;
+reg [7:0] sprite_y;
 reg [5:0] sprite_width;
-//Bootleg Iron Horse PCBs have a lower-than-normal sprite limit causing noticeable sprite flickering - reduce the sprite limit
-//to 32 sprites (0 - 155 in increments of 5) if one such ROM set is loaded (render 96 sprites at once, 0 - 485 in increments of
-//5, otherwise)
-wire [8:0] sprite_limit = (BTLG == 2'b10) ? 9'd155 : 9'd485;
+reg [3:0] sprite_color;
+reg [2:0] sprite_size;
+reg sprite_hflip, sprite_vflip, sprite_x8_sel, sprite_x8_vram;
 always_ff @(posedge CK49) begin
+	//Bootleg Iron Horse PCBs have a lower-than-normal sprite limit causing noticeable sprite flickering - reduce the sprite limit
+	//to 32 sprites (0 - 155 in increments of 5) if one such ROM set is loaded (render 96 sprites at once, 0 - 485 in increments of
+	//5, otherwise)
+	sprite_limit <= (BTLG == 2'b10) ? 9'd155 : 9'd485;
 	//Reset the sprite state machine whenever the sprite horizontal postion, and in turn the horziontal counter, returns to 0
 	//Also hold the sprite state machine in this initial state for the first line while drawing sprites for bootleg Iron Horse
 	//ROM sets to prevent graphical garbage from occurring on the top-most line
@@ -718,25 +824,45 @@ always_ff @(posedge CK49) begin
 		case(sprite_fsm_state)
 			0: /* empty */ ;
 			1: begin
+				//If the sprite limit is reached, hold the state machine in an empty state, otherwise latch the sprite H/V flip
+				//bits, sprite size, bit 8 of the sprite X position and its select bit
 				if(sprite_index > sprite_limit)
 					sprite_fsm_state <= 0;
 				else begin
-					sprite_attrib4 <= spriteram_D;
+					sprite_vflip <= spriteram_Dcache[6] ^ ~flipscreen;
+					sprite_hflip <= spriteram_Dcache[5] ^ flipscreen;
+					sprite_size <= spriteram_Dcache[4:2];
+					sprite_x8_sel <= spriteram_Dcache[1];
+					sprite_x8_vram <= spriteram_Dcache[0];
 					sprite_offset <= 3'd3;
 					sprite_fsm_state <= sprite_fsm_state + 3'd1;
 				end
 			end
 			2: begin
-				sprite_attrib3 <= spriteram_D;
+				//Latch sprite X position and set the 9th bit as either the one latched previously from VRAM or the AND of position
+				//bits [7:3] based on the state of the select bit
+				if(sprite_x8_sel)
+					sprite_x[8] <= sprite_x8_vram ^ flipscreen;
+				else
+					sprite_x[8] <= (&spriteram_Dcache[7:3]) ^ flipscreen;
+				sprite_x[7:0] <= spriteram_Dcache ^ {8{flipscreen}};
 				sprite_offset <= 3'd2;
 				sprite_fsm_state <= sprite_fsm_state + 3'd1;
 			end
 			3: begin
-				//Skip the current sprite if it's inactive, otherwise obtain the sprite Y attribute and continue
-				//scanning out the rest of the sprite attributes
+				//Latch sprite Y position
+				sprite_y <= spriteram_Dcache;
+				sprite_offset <= 3'd1;
+				sprite_fsm_state <= sprite_fsm_state + 3'd1;
+			end
+			4: begin
+				//Skip the current sprite if it's inactive, otherwise latch sprite color and the upper/lower 2 bits of the sprite
+				//code, and continue scanning out the rest of the sprite attributes
 				if(sprite_active) begin
-					sprite_attrib2 <= spriteram_D;
-					sprite_offset <= 3'd1;
+					sprite_color <= spriteram_Dcache[7:4];
+					sprite_code[1:0] <= spriteram_Dcache[3:2];
+					sprite_code[11:10] <= spriteram_Dcache[1:0];
+					sprite_offset <= 3'd0;
 					sprite_fsm_state <= sprite_fsm_state + 3'd1;
 				end
 				else begin
@@ -745,13 +871,9 @@ always_ff @(posedge CK49) begin
 					sprite_fsm_state <= 3'd1;
 				end
 			end
-			4: begin
-				sprite_attrib1 <= spriteram_D;
-				sprite_offset <= 3'd0;
-				sprite_fsm_state <= sprite_fsm_state + 3'd1;
-			end
 			5: begin
-				sprite_attrib0 <= spriteram_D;
+				//Latch bits [9:2] of the sprite code and set up the sprite width based on the sprite size
+				sprite_code[9:2] <= spriteram_Dcache;
 				sprite_offset <= 3'd4;
 				sprite_index <= sprite_index + 9'd5;
 				case(sprite_size)
@@ -759,7 +881,6 @@ always_ff @(posedge CK49) begin
 					3'b001: sprite_width <= 6'b110000 + (BTLG == 2'b01 && flipscreen);
 					3'b010: sprite_width <= 6'b111000 + (BTLG == 2'b01 && flipscreen);
 					3'b011: sprite_width <= 6'b111000 + (BTLG == 2'b01 && flipscreen);
-					3'b100: sprite_width <= 6'b100000 + (BTLG == 2'b01 && flipscreen);
 					default: sprite_width <= 6'b100000 + (BTLG == 2'b01 && flipscreen);
 				endcase
 				sprite_fsm_state <= sprite_fsm_state + 3'd1;
@@ -779,36 +900,6 @@ always_ff @(posedge CK49) begin
 			default:;
 		endcase
 end
-
-//Obtain sprite X position from sprite attribute byte 3 - append a 9th bit based on the state of bit 1 sprite attribute byte 4,
-//bit 0 of sprite attribute byte 4 if high or the AND of the upper 5 bits of the horizontal position if low
-reg sprite_x8;
-always_ff @(posedge CK49) begin
-	if(sprite_attrib4[1] || tile_ctrl[2])
-		sprite_x8 <= sprite_attrib4[0];
-	else
-		sprite_x8 <= &sprite_attrib3[7:3];
-end
-wire [8:0] sprite_x = {sprite_x8 ^ flipscreen, sprite_attrib3 ^ {8{flipscreen}}};
-
-//If the sprite state machine is in state 3, obtain sprite Y position directly from sprite RAM, otherwise obtain it from
-//sprite attribute byte 2
-wire [7:0] sprite_y = (sprite_fsm_state == 3'd3) ? spriteram_D : sprite_attrib2;
-
-//Sprite flip attributes are stored in bits 5 (horizontal) and 6 (vertical) of sprite attribute byte 4
-//Also XOR these attributes with the flipscreen bit (XOR with the inverse for vertical flip)
-wire sprite_hflip = sprite_attrib4[5] ^ flipscreen;
-wire sprite_vflip = sprite_attrib4[6] ^ ~flipscreen;
-
-//Sprite color is the upper 4 bits of sprite attribute byte 1
-wire [3:0] sprite_color = sprite_attrib1[7:4];
-
-//The 005885 supports 5 different sprite sizes: 8x8, 8x16, 16x8, 16x16 and 32x32.  Retrieve this attribute from bits [4:2] of
-//sprite attribute byte 4
-wire [2:0] sprite_size = sprite_attrib4[4:2];
-
-//Sprite code is sprite attribute byte 0 sandwiched between bits 1 and 0 and bits 3 and 2 of sprite attribute byte 1
-wire [11:0] sprite_code = {sprite_attrib1[1:0], sprite_attrib0, sprite_attrib1[3:2]};
 
 //Adjust sprite code based on sprite size
 wire [11:0] sprite_code_sized = sprite_size == 3'b000 ? {sprite_code[11:2], ly[3], lx[3]}:          //16x16
@@ -863,7 +954,7 @@ always_ff @(posedge CK49) begin
 	else if(!old_vsync && NVSY)
 		sprite_bank <= tile_ctrl[3];
 end
-wire [11:0] spriteram_A = {(BTLG == 2'b01) ? tile_ctrl[3] : sprite_bank, 2'b00, sprite_address};
+wire [10:0] spriteram_A = {2'b00, sprite_address};
 
 //Address output to sprite LUT PROM
 assign OCF = sprite_color;
@@ -918,7 +1009,7 @@ reg [9:0] radr0 = 10'd0;
 reg [9:0] radr1 = 10'd1;
 always_ff @(posedge CK49) begin
 	if(cen_6m)
-		radr0 <= {sprite_lbuff_bank, flipscreen ? sprite_hpos - 9'd225 : tile_ctrl[2] ? sprite_hpos - 9'd40 : sprite_hpos};
+		radr0 <= {sprite_lbuff_bank, flipscreen ? sprite_hpos - 9'd225 : sprite_hpos};
 end
 
 //Sprite line buffer
@@ -948,18 +1039,16 @@ always_ff @(posedge CK49) begin
 	end
 end
 
-//Delay sprite layer by 2 horizontal lines (1 line if a bootleg Jackal ROM set is loaded and the screen is flipped)
-reg [7:0] sprite_dly = 8'd0;
+//Delay sprite layer by 17 horizontal lines (16 lines if a bootleg Jackal ROM set is loaded and the screen is flipped)
+reg [67:0] sprite_dly = 8'd0;
 always_ff @(posedge CK49) begin
-	if(cen_6m) begin
-		if(BTLG == 2'b01 && flipscreen)
-			sprite_dly <= {4'd0, lbuff_read};
-		else
-			sprite_dly <= {lbuff_read, sprite_dly[7:4]};
-	end
+	if(cen_6m)
+		sprite_dly <= {lbuff_read, sprite_dly[67:4]};
 end
-//Jackal bootlegs fail to render the last two vertical lines of the sprite layer - model this behavior here
-wire [3:0] sprite_D = (BTLG == 2'b01 && ((h_cnt >= 244 && ~flipscreen) || (h_cnt >= 248 && flipscreen))) ? 4'd0 : sprite_dly[3:0];
+//Jackal bootlegs fail to render the last two vertical lines of the sprite layer on the right side of the screen
+//Model this behavior here
+wire [3:0] sprite_D = (BTLG == 2'b01 && ((h_cnt >= 131 && h_cnt <= 178 && ~flipscreen) ||
+                      (h_cnt >= 139 && h_cnt <= 181 && flipscreen))) ? 4'd0 : sprite_dly[3:0];
 
 //--------------------------------------------------------- Color mixer --------------------------------------------------------//
 
@@ -973,8 +1062,8 @@ always_ff @(posedge CK49) begin
 	if(cen_6m)
 		pixel_D <= {tile_sprite_sel, tile_sprite_D};
 end
-assign COL = (BTLG == 2'b01 && ((h_cnt >= 247 && ~flipscreen) || (h_cnt <= 14 && flipscreen))) ||
-             (BTLG == 2'b10 && ((h_cnt <= 20 && ~flipscreen) || ((h_cnt <= 18 || h_cnt >= 251) && flipscreen))) ? 5'd0 : pixel_D;
+assign COL = ((BTLG == 2'b01 && ((h_cnt >= 134 && h_cnt <= 180 && ~flipscreen) || (h_cnt >= 244 && h_cnt <= 289 && flipscreen))) ||
+             (BTLG == 2'b10 && h_cnt >= 176 && h_cnt <= 291)) ? 5'd0 : pixel_D;
 //The above condition blacks out the last 4 lines on the right side of the screen (left when flipped) when a bootleg Jackal ROM set
 //is loaded and blacks out the left-most 8 lines (7 when flipped plus an extra 2 lines on the right side) when a bootleg Iron Horse
 //ROM set is loaded - this simulates the earlier-than-normal start of HBlank for Jackal bootlegs and later-than-normal end of

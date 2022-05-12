@@ -59,17 +59,16 @@ Quick reference for folders and file placement:
 | A | Crouch |
 
 ## Known Issues
-1) Sprites render one frame earlier than normal - this is not correct behavior for Iron Horse's graphics rendering
-2) Although bootleg flaws are modeled, sprite flickering is not 100% accurate and the slower clock used by bootleg Iron Horse PCBs is missing - as such, the core behaves as if said bootleg used the same clock as the original PCB
-3) The high score system may cause lockups or unusual behavior when high scores are loaded - resetting the core usually fixes this
-4) The volume scale of the YM2203's SSG section needs further verification
+1) Although bootleg flaws are modeled, sprite flickering is not 100% accurate
+2) The high score system may cause lockups or unusual behavior when high scores are loaded with normalized video timings
+3) The volume scale of the YM2203's SSG section needs further verification
 
-## Hiscore save/load
+## High score save/load
 
-Save and load of hiscores is supported for this core:
+Save and load of high scores is supported for this core:
 
-To save your hiscores manually, press the 'Save Settings' option in the OSD.  Hiscores will be automatically loaded when the core is started.
+To save your high scores manually, press the 'Save Settings' option in the OSD.  High scores will be automatically loaded when the core is started.
 
-To enable automatic saving of hiscores, turn on the 'Autosave Hiscores' option, press the 'Save Settings' option in the OSD, and reload the core.  Hiscores will then be automatically saved (if they have changed) any time the OSD is opened.
+To enable automatic saving of high scores, turn on the 'Autosave Hiscores' option, press the 'Save Settings' option in the OSD, and reload the core.  High scores will then be automatically saved (if they have changed) any time the OSD is opened.
 
-Hiscore data is stored in /media/fat/config/nvram/ as ```<mra filename>.nvm```
+High score data is stored in /media/fat/config/nvram/ as ```<mra filename>.nvm```

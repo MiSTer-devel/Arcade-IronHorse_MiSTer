@@ -28,7 +28,7 @@ module ironhorse_ssg_lpf(
 	input signed [15:0] in,
 	output signed [15:0] out);
 	
-	reg [9:0] div = 256; //Sample at 49.152MHz/96 = 192000Hz
+	reg [9:0] div = 256; //Sample at 49.152MHz/256 = 192156.25Hz
 	
 	//Coefficients computed with Octave/Matlab/Online filter calculators.
 	//or with scipy.signal.bessel or similar tools
@@ -47,14 +47,17 @@ module ironhorse_ssg_lpf(
 		B2 = 18'd262;
 	end
 	
-	iir_1st_order lpf6db(.clk(clk),
-								.reset(reset),
-								.div(div),
-								.A2(A2),
-								.B1(B1),
-								.B2(B2),
-								.in(in),
-								.out(audio_post_lpf1)); 
+	iir_1st_order lpf6db
+	(
+		.clk(clk),
+		.reset(reset),
+		.div(div),
+		.A2(A2),
+		.B1(B1),
+		.B2(B2),
+		.in(in),
+		.out(audio_post_lpf1)
+	); 
 	 
 	assign out = audio_post_lpf1;
 

@@ -37,7 +37,7 @@ module emu
 	input         RESET,
 
 	//Must be passed to hps_io module
-	inout  [45:0] HPS_BUS,
+	inout  [48:0] HPS_BUS,
 
 	//Base video clock. Usually equals to CLK_SYS.
 	output        CLK_VIDEO,
@@ -234,10 +234,10 @@ localparam CONF_STR = {
 	"V,v",`BUILD_DATE
 };
 
-wire        forced_scandoubler;
-wire  [1:0] buttons;
-wire [31:0] status;
-wire [10:0] ps2_key;
+wire         forced_scandoubler;
+wire   [1:0] buttons;
+wire [127:0] status;
+wire  [10:0] ps2_key;
 
 wire        ioctl_download;
 wire        ioctl_upload;
@@ -357,7 +357,7 @@ always @(posedge CLK_50M) begin
 					cfg_data <= 2748778984;
 				else begin
 					if(underclock_r)
-						cfg_data <= 2977614927;
+						cfg_data <= 2971430088;
 					else
 						cfg_data <= 3639383488;
 				end
@@ -444,8 +444,8 @@ wire m_pause    = joy[10];
 
 // PAUSE SYSTEM
 wire pause_cpu;
-wire [11:0] rgb_out;
-pause #(4,4,4,49) pause
+wire [23:0] rgb_out;
+pause #(8,8,8,49) pause
 (
 	.*,
 	.clk_sys(CLK_49M),
@@ -470,7 +470,20 @@ end
 
 wire hblank, vblank;
 wire hs, vs;
-wire [3:0] r, g, b;
+wire [3:0] r_out, g_out, b_out;
+
+//Adjust the color tones based on the measured outputs of the weighted resistor DAC
+//on the PCB
+wire [7:0] ironhorse_color[16] =
+'{
+	8'd0,   8'd14,  8'd31,  8'd46,
+	8'd67,  8'd81,  8'd98,  8'd112,
+	8'd143, 8'd157, 8'd174, 8'd188,
+	8'd209, 8'd224, 8'd241, 8'd255
+};
+wire [7:0] r = ironhorse_color[r_out];
+wire [7:0] g = ironhorse_color[g_out];
+wire [7:0] b = ironhorse_color[b_out];
 
 reg ce_pix;
 always @(posedge CLK_49M) begin
@@ -480,7 +493,7 @@ always @(posedge CLK_49M) begin
 	ce_pix <= !div;
 end
 
-arcade_video #(240, 12) arcade_video
+arcade_video #(240, 24) arcade_video
 (
 	.*,
 
@@ -527,9 +540,9 @@ IronHorse IronHorse_inst
 	.video_vblank(vblank),               // output video_vblank
 	.video_hblank(hblank),               // output video_hblank
 	
-	.video_r(r),                         // output [4:0] video_r
-	.video_g(g),                         // output [4:0] video_g
-	.video_b(b),                         // output [4:0] video_b
+	.video_r(r_out),                     // output [3:0] video_r
+	.video_g(g_out),                     // output [3:0] video_g
+	.video_b(b_out),                     // output [3:0] video_b
 
 	.ioctl_addr(ioctl_addr),
 	.ioctl_wr(ioctl_wr && !ioctl_index),

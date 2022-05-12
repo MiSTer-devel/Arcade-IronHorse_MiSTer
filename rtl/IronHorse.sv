@@ -313,10 +313,11 @@ wire [15:0] gfxrom_A, sprites_A;
 //wire n_vram_oe, n_vram_we;
 wire [7:0] k005885_Dout, tilemap_lut_A, sprite_lut_A;
 wire [4:0] color_A;
-wire tile_attrib_D5, firq, irq, nmi, nioc;
+wire vram_D5, h1, firq, irq, nmi, nioc;
 k005885 u11D
 (
 	.CK49(clk_49m),
+	.H1O(h1),
 	.NRD(~mc6809e_rw),
 	.A(mc6809e_A[13:0]),
 	.DBi(mc6809e_Dout),
@@ -345,7 +346,7 @@ k005885 u11D
 	.NIRQ(irq),
 	.NNMI(nmi),
 	.NIOC(nioc),
-	.ATR5(tile_attrib_D5),
+	.ATR5(vram_D5),
 	.HCTR(h_center),
 	.VCTR(v_center),
 	.BTLG(is_bootleg),
@@ -356,6 +357,25 @@ k005885 u11D
 	.hs_access_read(hs_access_read),
 	.hs_access_write(hs_access_write)
 );
+
+//Divide the H1 output from the primary 005885 down by 4 to generate an external H4 signal for latching VRAM data bit 5,
+//then latch the VRAM data bit on both edges of H2 to obtain an extra attribute bit used by Iron Horse for its tilemaps
+reg [1:0] h4 = 2'b0;
+reg old_h1;
+always_ff @(posedge clk_49m) begin
+	old_h1 <= h1;
+	if(!old_h1 && h1)
+		h4 <= h4 + 2'd1;
+end
+reg [1:0] tile_attrib_D5;
+reg old_h4;
+always_ff @(posedge clk_49m) begin
+	old_h4 <= h4[1];
+	if(!old_h4 && h4[1])
+		tile_attrib_D5[1] <= vram_D5;
+	if(old_h4 && !h4[1])
+		tile_attrib_D5[0] <= tile_attrib_D5[1];
+end
 
 //Graphics ROMs
 wire [7:0] eprom4_D, eprom5_D, eprom6_D, eprom7_D;
@@ -383,7 +403,7 @@ eprom_5 u7F
 );
 eprom_6 u9F
 (
-	.ADDR({gfxrom_A[14], tile_attrib_D5, gfxrom_A[12:0]}),
+	.ADDR({gfxrom_A[14], tile_attrib_D5[0], gfxrom_A[12:0]}),
 	.CLK(clk_49m),
 	.DATA(eprom6_D),
 	.ADDR_DL(ioctl_addr),
@@ -394,7 +414,7 @@ eprom_6 u9F
 );
 eprom_7 u6F
 (
-	.ADDR({gfxrom_A[14], tile_attrib_D5, gfxrom_A[12:0]}),
+	.ADDR({gfxrom_A[14], tile_attrib_D5[0], gfxrom_A[12:0]}),
 	.CLK(clk_49m),
 	.DATA(eprom7_D),
 	.ADDR_DL(ioctl_addr),
